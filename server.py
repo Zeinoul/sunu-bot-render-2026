@@ -8,7 +8,7 @@ import firebase_admin
 from firebase_admin import credentials, db
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["https://sunu.com", "https://www.sunu.com", "*"])
 VERIFY_TOKEN = "sunu2026"
 
 print("🔄 Connexion Firebase...")
