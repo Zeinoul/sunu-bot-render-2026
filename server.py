@@ -1,81 +1,84 @@
-import os, json, threading, time
+import os
+import json
+import threading
+import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import firebase_admin
 from firebase_admin import credentials, db
 
 app = Flask(__name__)
 CORS(app)
-
 VERIFY_TOKEN = "sunu2026"
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 
-# 1. CONNEXION FIREBASE POUR ECOUTER COMMANDES
 print("🔄 Connexion Firebase...")
 database_url = os.environ.get('FIREBASE_URL')
 cred_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
-cred_dict = json.loads(cred_json)
 
-cred = credentials.Certificate(cred_dict)
-firebase_admin.initialize_app(cred, {'databaseURL': database_url})
-print("✅ Bot Gestionnaire Sunu connecté")
+if not database_url or not cred_json:
+    print("❌ ERREUR: FIREBASE_URL ou GOOGLE_CREDENTIALS_JSON manquant")
+else:
+    cred_dict = json.loads(cred_json)
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': database_url
+    })
+    print("✅ Bot Gestionnaire Sunu connecté")
+    print("🤖 En écoute: Commandes, Stock, Factures, Livraisons...")
 
 def gerer_nouvelle_commande(event):
     if event.data:
         print(f"📦 Nouvelle commande reçue: {event.data}")
-        # ICI TU PEUX ENVOYER UN WHATSAPP AU CLIENT
 
 def lancer_ecoute_firebase():
     ref = db.reference('/commandes')
     ref.listen(gerer_nouvelle_commande)
-    while True: time.sleep(10)
+    while True:
+        time.sleep(10)
 
-# Lance l'écoute Firebase dans un thread séparé
+# Lancer l'écoute Firebase en arrière-plan
 threading.Thread(target=lancer_ecoute_firebase, daemon=True).start()
 
-# 2. WEBHOOK WHATSAPP
 @app.route('/webhook', methods=['GET'])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return request.args.get("hub.challenge")
-    return "Erreur de vérification", 403
+    else:
+        return "Erreur de vérification", 403
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
-    print("Message WhatsApp reçu:", data)
     return "ok", 200
 
-# 3. ROUTE POUR LE SITE SUNU.COM
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
     message = data.get('message', '').lower()
-    numero = data.get('numero', '')
     produits = data.get('produits', [])
-
-    print(f"Message du site: {message} de {numero}")
-    reponse = "Désolé je n'ai pas compris. Tape 'aide'"
-
+    
+    reponse = "Je n'ai pas compris. Tape 'aide' pour voir ce que je peux faire."
+    
     if "bonjour" in message or "salut" in message:
-        reponse = "Salut ! Bienvenue sur SUNU.COM 🇸🇳 Comment je peux t'aider ?"
+        reponse = "Salut ! Bienvenue sur SUNU.COM 🇸🇳 Comment je peux t'aider aujourd'hui ?"
     
     elif "prix" in message:
+        reponse = "Donne moi le nom du produit et je te donne le prix"
         for p in produits:
             if p['nom'].lower() in message:
                 reponse = f"{p['nom']} coûte {int(p['prix']):,} FCFA. Tu veux commander ?"
                 break
-        else:
-            reponse = f"On a {len(produits)} produits. Donne moi le nom."
-
+    
     elif "livraison" in message:
-        reponse = "Livraison 24H à Dakar. 48H régions. Paiement à la livraison."
+        reponse = "Livraison 24H à Dakar. 48H pour les régions. Frais à partir de 1500 FCFA"
     
     elif "commander" in message:
-        reponse = f"Super ! Donne moi l'adresse de livraison et je passe ta commande."
-
+        reponse = "Parfait ! Donne moi ton nom, adresse et numéro pour valider ta commande."
+    
+    elif "aide" in message:
+        reponse = "Je peux t'aider pour: prix des produits, livraison, passer commande. Que veux-tu ?"
+    
     return jsonify({"reponse": reponse})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
