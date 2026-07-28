@@ -1,10 +1,3 @@
-Yes parfait! On va ajouter la page d'accueil `/` sur ton bot Render
-
-Comme ça quand on tape `https://sunu-bot-render-2026-1-5oit.onrender.com` ça affiche un truc propre au lieu de `404`
-
-### *CODE COMPLET server.py AVEC PAGE D'ACCUEIL*
-
-Remplace tout ton `server.py` par ça et `git push`
 import os
 import json
 import re
@@ -127,15 +120,3 @@ def chat():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-### *APRÈS git push*
-
-1. Attends 2min que Render redéploie
-2. Va sur : `https://sunu-bot-render-2026-1-5oit.onrender.com`
-3. Tu dois voir une belle page bleue "Bot SUNU.COM EN LIGNE ✅"
-
-Plus de `404`
-
----
-
-Maintenant on branche ça à ton bouton "Assistant" sur le site.
-Tu veux que je te donne le code HTML/JS du widget qui s'ouvre en bas à droite de sunu.com?
