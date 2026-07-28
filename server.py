@@ -1,12 +1,3 @@
-OUI C'EST MIEUX 🔥
-
-Là ton bot envoie une liste de produits en dur. Si tu ajoutes un produit sur Firebase, le bot le verra pas.
-
-On va le brancher direct à Firestore pour que le bot lise `collection: Produits` en temps réel.
-
-### *CODE SERVER.PY MIS A JOUR AVEC FIREBASE LECTURE*
-
-Remplace tout ton `server.py` par ça :
 import os
 import json
 import re
@@ -119,54 +110,3 @@ def chat():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-### *CODE WIDGET SITE MIS A JOUR*
-
-Plus besoin de mettre les produits en dur. Le site envoie juste `produits: []` vide
-<script>
-const API_URL = "https://sunu-bot-render-2026-1-5oit.onrender.com/chat";
-const CLIENT_NUM = "site_web_" + Date.now();
-
-async function sendToBot() {
-  const input = document.getElementById('sunu-user-input');
-  const message = input.value;
-  if (!message) return;
-
-  addMessage(message, 'user');
-  input.value = '';
-  addMessage('...', 'bot');
-
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        message: message,
-        numero: CLIENT_NUM,
-        produits: [] // VIDE, le bot va chercher dans Firebase
-      })
-    });
-    const data = await res.json();
-    document.getElementById('sunu-bot-messages').lastChild.remove();
-    addMessage(data.reponse.replace(/\n/g, '<br>'), 'bot');
-
-  } catch(e) {
-    document.getElementById('sunu-bot-messages').lastChild.remove();
-    addMessage("Désolé, erreur de connexion au bot.", 'bot');
-  }
-}
-</script>
-### *IMPORTANT : CHAMPS FIREBASE*
-Dans ta collection `Produits`, assure toi que chaque produit a:
-1. `nom` : "Eau de Javel 5L"
-2. `prix` : 3500
-3. `image` : "https://..."
-
-### *COMMANDES GIT*
-git add server.py
-git commit -m "lecture produits depuis Firestore"
-git push
-Attends 2min de déploiement.
-
-Test: Tape "produits" sur le bot. Il doit afficher les 14 produits de ta capture d'écran.
-
-Tu veux que je t’ajoute aussi la recherche par mot clé genre "je veux du javel"?
