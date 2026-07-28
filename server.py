@@ -1,32 +1,71 @@
+Yes parfait! On va ajouter la page d'accueil `/` sur ton bot Render
+
+Comme ça quand on tape `https://sunu-bot-render-2026-1-5oit.onrender.com` ça affiche un truc propre au lieu de `404`
+
+### *CODE COMPLET server.py AVEC PAGE D'ACCUEIL*
+
+Remplace tout ton `server.py` par ça et `git push`
 import os
 import json
-import threading
-import time
 import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, db
+import google.generativeai as genai
+import requests
 
 app = Flask(__name__)
-CORS(app, origins=["https://sunu.com", "https://www.sunu.com", "*"])
-VERIFY_TOKEN = "sunu2026"
+CORS(app)
 
-print("🔄 Connexion Firebase...")
-database_url = os.environ.get('FIREBASE_URL')
-cred_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+# ===== CONFIG =====
+cred_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+cred_dict = json.loads(cred_json)
+cred = credentials.Certificate(cred_dict)
+database_url = os.environ.get("FIREBASE_URL")
+firebase_admin.initialize_app(cred, {'databaseURL': database_url})
 
-if not database_url or not cred_json:
-    print("❌ ERREUR: FIREBASE_URL ou GOOGLE_CREDENTIALS_JSON manquant")
-else:
-    cred_dict = json.loads(cred_json)
-    cred = credentials.Certificate(cred_dict)
-    firebase_admin.initialize_app(cred, {
-        'databaseURL': database_url
-    })
-    print("✅ Bot Gestionnaire Sunu connecté")
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
+META_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+clients = {}
+
+print("✅ Bot Gestionnaire Sunu connecté")
+
+# ===== PAGE D'ACCUEIL =====
+@app.route('/', methods=['GET'])
+def accueil():
+    return """
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <title>Bot SUNU.COM API</title>
+        <style>
+            body { font-family: Arial; background: #0B5FFF; color: white; text-align: center; padding-top: 100px; }
+           .box { background: white; color: #333; padding: 40px; border-radius: 20px; width: 500px; margin: auto; }
+            h1 { color: #0B5FFF; }
+           .status { color: green; font-weight: bold; font-size: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="box">
+            <h1>🤖 Bot SUNU.COM</h1>
+            <p class="status">EN LIGNE ✅</p>
+            <p>API pour le site sunu.com</p>
+            <hr>
+            <p><b>Route:</b> POST /chat</p>
+            <p><b>WhatsApp:</b> +221 70 513 91 64</p>
+            <p>Version 2.0 - Propulsé par Gemini + Firebase</p>
+        </div>
+    </body>
+    </html>
+    """, 200
+
+# ===== FONCTIONS =====
 def extraire_infos_commande(message):
     tel_match = re.search(r'7[06758]\d{7}', message)
     tel = tel_match.group() if tel_match else ""
@@ -41,70 +80,62 @@ def sauvegarder_commande(data_commande):
         ref = db.reference('/commandes')
         ref.push(data_commande)
         return True
-    except:
-        return False
+    except: return False
 
-def trouver_produit(message, produits):
-    """Cherche dans nom + categorie + mots clés"""
-    message = message.lower()
-    for p in produits:
-        nom = p['nom'].lower()
-        cat = p.get('categorie','').lower()
-        if nom in message or cat in message or message in nom or message in cat:
-            return p
-    return None
-
+# ===== ROUTE PRINCIPALE CHAT =====
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.json
+    data = request.get_json()
     message = data.get('message', '').lower()
+    numero = data.get('numero')
     produits = data.get('produits', [])
-    numero = data.get('numero', '')
 
-    reponse = "Je n'ai pas compris. Tape 'aide' pour voir ce que je peux faire."
+    if numero not in clients: clients[numero] = {}
 
-    # 1. BONJOUR
-    if "bonjour" in message or "salut" in message:
-        reponse = "Salut! 👋 Bienvenue sur SUNU.COM 🇸🇳\nLivraison gratuite Dakar > 20.000 FCFA. Tu cherches quoi?"
+    # 1. AFFICHER PRODUITS
+    if 'produit' in message or 'catalogue' in message:
+        reponse = "Voici nos produits 👇\n\n"
+        for i, p in enumerate(produits[:8]):
+            reponse += f"{i+1}. *{p['nom']}* - {int(p['prix']):,} FCFA\n{p['image']}\n\n"
+        reponse += "Tape le numéro pour commander. Ex: 1"
 
-    # 2. ENREGISTRER NUMERO
-    elif re.match(r'7[06758]\d{7}', message):
-        reponse = f"✅ Numéro {message} enregistré. Que puis-je faire pour toi?"
+    # 2. CHOIX PRODUIT
+    elif message.isdigit() and 1 <= int(message) <= len(produits):
+        produit = produits[int(message)-1]
+        clients[numero]['produit'] = produit
+        reponse = f"✅ *{produit['nom']}* à {int(produit['prix']):,} FCFA\n\nDonne: Nom + Téléphone + Adresse"
 
-    # 3. AIDE
-    elif "aide" in message:
-        reponse = "Je peux t'aider pour:\n💰 Prix des produits\n🚚 Livraison\n🛒 Passer commande\nDis moi le nom du produit"
-
-    # 4. PRIX - INTELLIGENT
-    elif "prix" in message or "coute" in message:
-        produit = trouver_produit(message, produits)
-        if produit:
-            stock = "🔥 Il reste peu en stock!" if int(produit.get('stock', 10)) < 5 else "✅ En stock"
-            reponse = f"{produit['nom']} coûte {int(produit['prix']):,} FCFA. {stock}\nTu veux commander?"
-        else:
-            reponse = "Donne moi le nom exact du produit. Ex: 'prix ordinateur' ou 'prix iPhone 14'"
-
-    # 5. LIVRAISON
-    elif "livraison" in message:
-        reponse = "🚚 Livraison 24H Dakar. 48H régions. Frais dès 1500 FCFA.\n💰 Paiement à la livraison."
-
-    # 6. COMMANDE
-    elif any(mot in message for mot in ["commander", "commande", "je veux", "nom", "adresse"]):
+    # 3. COMMANDE
+    elif any(mot in message for mot in ["commander", "nom", "adresse"]):
         nom, tel, adresse = extraire_infos_commande(message)
         if nom and tel and adresse:
-            commande = {
-                "nom": nom, "telephone": tel, "adresse": adresse,
-                "numero_client": numero, "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "statut": "Nouvelle", "source": "Chatbot"
-            }
+            produit = clients[numero].get('produit', {'nom': 'Produit'})
+            commande = {"nom": nom, "telephone": tel, "adresse": adresse, "produit": produit['nom'], "date": datetime.now().strftime("%d/%m/%Y %H:%M")}
             if sauvegarder_commande(commande):
-                reponse = f"✅ Commande confirmée {nom}!\nOn t'appelle au {tel} dans 5min.\nLivraison: {adresse} 🙏"
-            else:
-                reponse = "Erreur. Je te rappelle dans 2min."
-        else:
-            reponse = "Pour commander donne moi:\nNom + Téléphone + Adresse\nEx: mon nom est Zeinoul, téléphone 77 907 54 32, adresse Pikine"
+                reponse = f"✅ Commande confirmée {nom}!\nOn t'appelle au {tel} dans 5min."
+            else: reponse = "Erreur système."
+        else: reponse = "Donne: Nom + Téléphone + Adresse"
+
+    # 4. SINON GEMINI
+    else:
+        try:
+            prompt = f"Tu es assistant SUNU.COM Dakar. Sois court et commercial. Client: '{message}'. Produits: {', '.join([p['nom'] for p in produits[:10]])}."
+            reponse = model.generate_content(prompt).text
+        except: reponse = "Tape 'produits' pour voir le catalogue"
 
     return jsonify({"reponse": reponse})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+### *APRÈS git push*
+
+1. Attends 2min que Render redéploie
+2. Va sur : `https://sunu-bot-render-2026-1-5oit.onrender.com`
+3. Tu dois voir une belle page bleue "Bot SUNU.COM EN LIGNE ✅"
+
+Plus de `404`
+
+---
+
+Maintenant on branche ça à ton bouton "Assistant" sur le site.
+Tu veux que je te donne le code HTML/JS du widget qui s'ouvre en bas à droite de sunu.com?
