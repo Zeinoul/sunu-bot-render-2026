@@ -1,81 +1,170 @@
-import os, json, threading, time
+import os
+import json
+import re
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import firebase_admin
 from firebase_admin import credentials, db
+import google.generativeai as genai
+import requests
 
 app = Flask(__name__)
 CORS(app)
 
-VERIFY_TOKEN = "sunu2026"
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
-
-# 1. CONNEXION FIREBASE POUR ECOUTER COMMANDES
-print("🔄 Connexion Firebase...")
-database_url = os.environ.get('FIREBASE_URL')
-cred_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+# ===== CONFIG =====
+# 1. FIREBASE
+cred_json = os.environ.get("FIREBASE_CRED")
 cred_dict = json.loads(cred_json)
-
 cred = credentials.Certificate(cred_dict)
+database_url = os.environ.get("FIREBASE_DB_URL")
 firebase_admin.initialize_app(cred, {'databaseURL': database_url})
-print("✅ Bot Gestionnaire Sunu connecté")
+print("✅ Bot Sunu + Firebase connecté")
 
-def gerer_nouvelle_commande(event):
-    if event.data:
-        print(f"📦 Nouvelle commande reçue: {event.data}")
-        # ICI TU PEUX ENVOYER UN WHATSAPP AU CLIENT
+# 2. GEMINI GRATUIT
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-def lancer_ecoute_firebase():
-    ref = db.reference('/commandes')
-    ref.listen(gerer_nouvelle_commande)
-    while True: time.sleep(10)
+# 3. API META WHATSAPP
+META_TOKEN = os.environ.get("META_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+META_URL = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
 
-# Lance l'écoute Firebase dans un thread séparé
-threading.Thread(target=lancer_ecoute_firebase, daemon=True).start()
+VERIFY_TOKEN = "sunu123"
+clients = {} # pour garder le contexte
 
-# 2. WEBHOOK WHATSAPP
+# ===== FONCTIONS =====
+def envoyer_whatsapp(numero, texte):
+    """Envoie un message via API Meta"""
+    headers = {"Authorization": f"Bearer {META_TOKEN}", "Content-Type": "application/json"}
+    data = {
+        "messaging_product": "whatsapp",
+        "to": "221" + numero, # 221 = code Sénégal
+        "type": "text",
+        "text": {"body": texte}
+    }
+    try:
+        requests.post(META_URL, headers=headers, json=data)
+    except Exception as e:
+        print("Erreur envoi Meta:", e)
+
+def extraire_infos_commande(message):
+    tel_match = re.search(r'7[06758]\d{7}', message)
+    tel = tel_match.group() if tel_match else ""
+    nom_match = re.search(r'nom\s*(?:est|:)?\s*([a-zA-Z\s]+)', message)
+    nom = nom_match.group(1).strip().title() if nom_match else ""
+    adresse_match = re.search(r'adresse\s*(?:est|:)?\s*(.+)', message)
+    adresse = adresse_match.group(1).strip().title() if adresse_match else ""
+    return nom, tel, adresse
+
+def sauvegarder_commande(data_commande):
+    try:
+        ref = db.reference('/commandes')
+        ref.push(data_commande)
+        print(f"✅ Commande sauvegardée: {data_commande['nom']}")
+        return True
+    except Exception as e:
+        print(f"❌ Erreur sauvegarde: {e}")
+        return False
+
+# ===== ROUTES =====
 @app.route('/webhook', methods=['GET'])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return request.args.get("hub.challenge")
-    return "Erreur de vérification", 403
+    else:
+        return "Erreur de vérification", 403
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """Pour recevoir les messages depuis WhatsApp Meta"""
     data = request.get_json()
-    print("Message WhatsApp reçu:", data)
+    # Ici Meta va t'envoyer les messages si quelqu'un écrit sur 70 513 91 64
     return "ok", 200
 
-# 3. ROUTE POUR LE SITE SUNU.COM
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.json
+    """C'est cette route que ton site appelle"""
+    data = request.get_json()
     message = data.get('message', '').lower()
-    numero = data.get('numero', '')
+    numero = data.get('numero')
     produits = data.get('produits', [])
 
-    print(f"Message du site: {message} de {numero}")
-    reponse = "Désolé je n'ai pas compris. Tape 'aide'"
+    if numero not in clients:
+        clients[numero] = {"etape": "accueil"}
 
+    reponse = "Je n'ai pas compris. Tape 'aide' pour voir ce que je peux faire."
+
+    # 1. BONJOUR
     if "bonjour" in message or "salut" in message:
-        reponse = "Salut ! Bienvenue sur SUNU.COM 🇸🇳 Comment je peux t'aider ?"
-    
+        reponse = "Salut! 👋 Bienvenue sur SUNU.COM 🇸🇳\nLivraison gratuite Dakar > 20.000 FCFA. Tu cherches quoi?"
+
+    # 2. ENREGISTRER NUMERO
+    elif re.match(r'7[06758]\d{7}', message):
+        reponse = f"✅ Numéro {message} enregistré. Que puis-je faire pour toi?"
+
+    # 3. AFFICHER PRODUITS AVEC PHOTOS
+    elif 'produit' in message or 'catalogue' in message or 'voir' in message or 'ménager' in message:
+        if len(produits) == 0:
+            reponse = "Aucun produit chargé pour le moment."
+        else:
+            reponse = "Voici nos produits du moment 👇\n\n"
+            for i, p in enumerate(produits[:8]):
+                reponse += f"{i+1}. *{p['nom']}* - {int(p['prix']):,} FCFA\n"
+                reponse += f"{p['image']}\n\n" # Le lien image s'affiche
+            reponse += "Tape le numéro pour commander. Ex: 1"
+
+    # 4. CHOIX PRODUIT PAR NUMERO
+    elif message.isdigit() and 1 <= int(message) <= 8:
+        index = int(message) - 1
+        produit = produits[index]
+        clients[numero]['produit_choisi'] = produit
+        reponse = f"✅ Tu as choisi: *{produit['nom']}* à {int(produit['prix']):,} FCFA\n\n"
+        reponse += "Pour valider donne moi:\nNom + Téléphone + Adresse\nEx: mon nom est Zeinoul, téléphone 77 907 54 32, adresse Pikine"
+
+    # 5. PRIX
     elif "prix" in message:
         for p in produits:
             if p['nom'].lower() in message:
-                reponse = f"{p['nom']} coûte {int(p['prix']):,} FCFA. Tu veux commander ?"
+                stock = "🔥 Il reste peu en stock!" if int(p.get('stock', 10)) < 5 else "✅ En stock"
+                reponse = f"{p['nom']} coûte {int(p['prix']):,} FCFA. {stock}\nTu veux commander?"
                 break
         else:
-            reponse = f"On a {len(produits)} produits. Donne moi le nom."
+            reponse = "Donne moi le nom du produit. Ex: 'prix javel'"
 
-    elif "livraison" in message:
-        reponse = "Livraison 24H à Dakar. 48H régions. Paiement à la livraison."
-    
-    elif "commander" in message:
-        reponse = f"Super ! Donne moi l'adresse de livraison et je passe ta commande."
+    # 6. COMMANDE
+    elif any(mot in message for mot in ["commander", "commande", "nom", "adresse"]):
+        nom, tel, adresse = extraire_infos_commande(message)
+        if nom and tel and adresse:
+            produit = clients[numero].get('produit_choisi', {'nom': 'Produit demandé'})
+            commande = {
+                "nom": nom, "telephone": tel, "adresse": adresse,
+                "numero_client": numero, "produit": produit['nom'],
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "statut": "Nouvelle", "source": "Chatbot Site"
+            }
+            if sauvegarder_commande(commande):
+                reponse = f"✅ Commande confirmée {nom}!\nOn t'appelle au {tel} dans 5min.\nLivraison: {adresse} 🙏"
+                # Optionnel: envoyer aussi sur ton WhatsApp perso
+                # envoyer_whatsapp("775139164", f"Nouvelle commande: {nom} - {produit['nom']}")
+            else:
+                reponse = "Erreur. Je te rappelle dans 2min."
+        else:
+            reponse = "Pour commander donne moi:\nNom + Téléphone + Adresse\nEx: mon nom est Zeinoul, téléphone 77 907 54 32, adresse Pikine"
+
+    # 7. SINON GEMINI REPOND
+    else:
+        try:
+            prompt = f"""Tu es l'assistant commercial de SUNU.COM au Sénégal.
+            Sois court, sympa, en Français/Wolof. Client: "{message}".
+            Produits dispo: {', '.join([p['nom'] for p in produits[:10]])}.
+            Si il demande un produit, dis lui de taper 'produits'."""
+            response = model.generate_content(prompt)
+            reponse = response.text
+        except:
+            reponse = "Désolé je n'ai pas compris. Tape 'produits' pour voir le catalogue"
 
     return jsonify({"reponse": reponse})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))iron.get("PORT", 5000)))
