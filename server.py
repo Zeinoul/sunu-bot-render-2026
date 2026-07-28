@@ -1,13 +1,3 @@
-Ahhh j’ai compris l’erreur 😅
-
-`SyntaxError: unterminated string literal (detected at line 1)`
-Tu as copié-collé mon texte d’explication dans `server.py` au lieu du code seul.
-
-Il faut seulement le code Python.
-
-### *CORRECTION : VOICI LE VRAI server.py À COLLER*
-
-Copie ça exactement et fais `git push` :
 import os
 import json
 import re
@@ -126,12 +116,3 @@ def chat():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-### *COMMANDES GIT*
-git add server.py
-git commit -m "fix: ajout page accueil"
-git push
-Attends 1min que Render re-déploie.
-
-Après tu vas sur `https://sunu-bot-render-2026-1-5oit.onrender.com` et tu dois voir la page bleue.
-
-Dis moi si ça passe cette fois 👇
