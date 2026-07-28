@@ -1,3 +1,13 @@
+Ahhh j’ai compris l’erreur 😅
+
+`SyntaxError: unterminated string literal (detected at line 1)`
+Tu as copié-collé mon texte d’explication dans `server.py` au lieu du code seul.
+
+Il faut seulement le code Python.
+
+### *CORRECTION : VOICI LE VRAI server.py À COLLER*
+
+Copie ça exactement et fais `git push` :
 import os
 import json
 import re
@@ -7,7 +17,6 @@ from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, db
 import google.generativeai as genai
-import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -22,8 +31,6 @@ firebase_admin.initialize_app(cred, {'databaseURL': database_url})
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-META_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 clients = {}
 
 print("✅ Bot Gestionnaire Sunu connecté")
@@ -51,7 +58,6 @@ def accueil():
             <p>API pour le site sunu.com</p>
             <hr>
             <p><b>Route:</b> POST /chat</p>
-            <p><b>WhatsApp:</b> +221 70 513 91 64</p>
             <p>Version 2.0 - Propulsé par Gemini + Firebase</p>
         </div>
     </body>
@@ -73,7 +79,8 @@ def sauvegarder_commande(data_commande):
         ref = db.reference('/commandes')
         ref.push(data_commande)
         return True
-    except: return False
+    except:
+        return False
 
 # ===== ROUTE PRINCIPALE CHAT =====
 @app.route('/chat', methods=['POST'])
@@ -83,22 +90,20 @@ def chat():
     numero = data.get('numero')
     produits = data.get('produits', [])
 
-    if numero not in clients: clients[numero] = {}
+    if numero not in clients:
+        clients[numero] = {}
 
-    # 1. AFFICHER PRODUITS
     if 'produit' in message or 'catalogue' in message:
         reponse = "Voici nos produits 👇\n\n"
         for i, p in enumerate(produits[:8]):
             reponse += f"{i+1}. *{p['nom']}* - {int(p['prix']):,} FCFA\n{p['image']}\n\n"
         reponse += "Tape le numéro pour commander. Ex: 1"
 
-    # 2. CHOIX PRODUIT
     elif message.isdigit() and 1 <= int(message) <= len(produits):
         produit = produits[int(message)-1]
         clients[numero]['produit'] = produit
         reponse = f"✅ *{produit['nom']}* à {int(produit['prix']):,} FCFA\n\nDonne: Nom + Téléphone + Adresse"
 
-    # 3. COMMANDE
     elif any(mot in message for mot in ["commander", "nom", "adresse"]):
         nom, tel, adresse = extraire_infos_commande(message)
         if nom and tel and adresse:
@@ -106,17 +111,27 @@ def chat():
             commande = {"nom": nom, "telephone": tel, "adresse": adresse, "produit": produit['nom'], "date": datetime.now().strftime("%d/%m/%Y %H:%M")}
             if sauvegarder_commande(commande):
                 reponse = f"✅ Commande confirmée {nom}!\nOn t'appelle au {tel} dans 5min."
-            else: reponse = "Erreur système."
-        else: reponse = "Donne: Nom + Téléphone + Adresse"
-
-    # 4. SINON GEMINI
+            else:
+                reponse = "Erreur système."
+        else:
+            reponse = "Donne: Nom + Téléphone + Adresse"
     else:
         try:
             prompt = f"Tu es assistant SUNU.COM Dakar. Sois court et commercial. Client: '{message}'. Produits: {', '.join([p['nom'] for p in produits[:10]])}."
             reponse = model.generate_content(prompt).text
-        except: reponse = "Tape 'produits' pour voir le catalogue"
+        except:
+            reponse = "Tape 'produits' pour voir le catalogue"
 
     return jsonify({"reponse": reponse})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+### *COMMANDES GIT*
+git add server.py
+git commit -m "fix: ajout page accueil"
+git push
+Attends 1min que Render re-déploie.
+
+Après tu vas sur `https://sunu-bot-render-2026-1-5oit.onrender.com` et tu dois voir la page bleue.
+
+Dis moi si ça passe cette fois 👇
