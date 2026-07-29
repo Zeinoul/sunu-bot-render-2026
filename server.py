@@ -16,7 +16,7 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 ADMIN_WHATSAPP = "221779075432" # Ton numéro admin
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Init Firebase - VERSION SÉCURISÉE
+# Init Firebase
 db = None
 firebase_creds = os.getenv("FIREBASE_CREDENTIALS")
 if firebase_creds:
@@ -31,7 +31,7 @@ if firebase_creds:
 else:
     print("⚠️ FIREBASE_CREDENTIALS non trouvée dans Render")
 
-# Init Gemini - VERSION SÉCURISÉE
+# Init Gemini
 model = None
 if GEMINI_API_KEY:
     try:
@@ -43,7 +43,7 @@ if GEMINI_API_KEY:
 else:
     print("⚠️ GEMINI_API_KEY non trouvée dans Render")
 
-# ========== FONCTIONS WHATSAPP ==========
+# ========== FONCTIONS ==========
 def envoyer_whatsapp(numero, message):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         print("Erreur: Token WhatsApp ou Phone ID manquant")
@@ -59,93 +59,9 @@ def envoyer_whatsapp(numero, message):
     }
     try:
         r = requests.post(url, headers=headers, json=data, timeout=10)
-        print("WhatsApp envoyé:", r.status_code, r.text[:100])
+        print("WhatsApp envoyé:", r.status_code)
     except Exception as e:
         print("Erreur WhatsApp:", e)
-
-# ========== LOGIQUE CORE ==========
-Ok je te montre exactement 👇
-
-Dans ton `server.py` sur Render, cherche la fonction `def traiter_message`
-
-### *1. SUPPRIME ÇA ENTIER :*
-
-De :
-def traiter_message(numero, message_user, produits=[]):
-    if not model:
-        return "Le bot est en maintenance."
-
-    prompt = f"""
-    Tu es l'assistante de SUNU.COM...
-    ...
-    """
-
-    response = model.generate_content(prompt)
-    texte = response.text.strip()
-
-    if texte.startswith("{") and "action" in texte:
-        try:
-            commande = json.loads(texte)
-            if commande.get("action") == "creer_commande":
-                gestion_direct(commande)
-                return "Parfait! Votre commande est enregistrée."
-        except:
-            pass
-
-    return texte
-Jusqu'à :
-return texte
-### *2. COLLE ÇA À LA PLACE :*
-def traiter_message(numero, message_user, produits=[]):
-    if not model:
-        return "Le bot est en maintenance. Réessayez dans 5min."
-
-    prompt = f"""
-    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends: {produits}
-    Client: {numero} a dit: "{message_user}"
-
-    Règles:
-    1. Sois chaleureuse et courte. Parle en Wolof/Français.
-    2. Si le client donne son numéro, remercie et demande son Nom et Adresse.
-    3. Si le client donne Nom + Téléphone + Adresse, réponds UNIQUEMENT avec ce JSON:
-    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total": 0, "produits": "panier"}}
-    4. Sinon réponds normalement pour vendre et aider.
-    """
-    try:
-        response = model.generate_content(prompt)
-        texte = response.text.strip()
-
-        # Si Gemini renvoie du JSON = c'est une commande
-        if texte.startswith("{") and "action" in texte:
-            try:
-                commande = json.loads(texte)
-                if commande.get("action") == "creer_commande":
-                    gestion_direct(commande)
-                    return "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."
-            except Exception as e:
-                print("JSON cassé:", e)
-                return "Merci. Pouvez-vous me redonner votre nom et adresse complète svp?"
-        
-        return texte
-    except Exception as e:
-        print("Erreur Gemini:", e)
-        return "Navrée, petite erreur technique. Pouvez-vous répéter svp?"
-### *3. APRES AVOIR COLLE*
-1.  `git add .` `git commit -m "fix bot"` `git push`
-2.  Va sur Render > Manual Deploy > Clear build cache & deploy
-3.  Attends 2min que ça redémarre
-
-### *4. TEST*
-Toi: 77 907 54 32
-Bot: Merci! Quel est votre nom et adresse de livraison?
-Toi: Aicha Ndiaye Parcelles Assainies
-Bot: Parfait! Votre commande est enregistrée...
-Et dans Firebase tu verras la commande apparaître dans `commandes`
-
-Fais ça et envoie-moi la réponse du bot après le déploiement
-    except Exception as e:
-        print("Erreur Gemini:", e)
-        return "Désolée, petite erreur. Pouvez-vous répéter?"
 
 def gestion_direct(data):
     print("Commande reçue direct:", data)
@@ -177,6 +93,41 @@ def gestion_direct(data):
     except Exception as e:
         print("Erreur gestion:", e)
         return {"status": "erreur", "details": str(e)}
+
+def traiter_message(numero, message_user, produits=[]):
+    if not model:
+        return "Le bot est en maintenance. Réessayez dans 5min."
+
+    prompt = f"""
+    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends: {produits}
+    Client: {numero} a dit: "{message_user}"
+
+    Règles:
+    1. Sois chaleureuse et courte. Parle en Wolof/Français.
+    2. Si le client donne seulement son numéro, remercie et demande son Nom et Adresse.
+    3. Si le client donne Nom + Adresse, réponds UNIQUEMENT avec ce JSON:
+    {{"action": "creer_commande", "nom": "...", "whatsapp": "{numero}", "adresse": "...", "total": 0, "produits": "panier"}}
+    4. Sinon réponds normalement pour vendre et aider.
+    """
+    try:
+        response = model.generate_content(prompt)
+        texte = response.text.strip()
+
+        # Si Gemini renvoie du JSON = c'est une commande
+        if texte.startswith("{") and "action" in texte:
+            try:
+                commande = json.loads(texte)
+                if commande.get("action") == "creer_commande":
+                    gestion_direct(commande)
+                    return "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."
+            except Exception as e:
+                print("JSON cassé:", e)
+                return "Merci. Pouvez-vous me redonner votre nom et adresse complète svp?"
+
+        return texte
+    except Exception as e:
+        print("Erreur Gemini:", e)
+        return "Navrée, petite erreur technique. Pouvez-vous répéter svp?"
 
 # ========== ROUTES ==========
 @app.route("/chat", methods=["POST"])
