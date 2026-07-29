@@ -13,7 +13,7 @@ CORS(app)
 # ========== CONFIG ==========
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-ADMIN_WHATSAPP = "22177XXXXXXX" # Mets ton numéro admin ici
+ADMIN_WHATSAPP = "221779075432" 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Init Firebase
