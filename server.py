@@ -14,7 +14,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # 2. URL DU BOT GESTIONNAIRE - on fera ça après
-URL_GESTIONNAIRE = "https://sunu-gestionnaire.onrender.com/gestion"
+URL_GESTIONNAIRE = "URL_GESTIONNAIRE = "https://sunu-bot-render-2026-1-5oit.onrender.com/gestion""
 
 # 3. STOCKAGE CLIENTS
 clients = {}
