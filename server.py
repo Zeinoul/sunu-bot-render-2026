@@ -16,22 +16,34 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 ADMIN_WHATSAPP = "221779075432"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Init Firebase - avec try pour ne pas crasher
-try:
-    cred = credentials.Certificate(json.loads(os.getenv("FIREBASE_CREDENTIALS")))
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    print("✅ Firebase connecté")
-except Exception as e:
-    db = None
-    print("⚠️ Firebase erreur:", e)
+# Init Firebase - VERSION SÉCURISÉE
+db = None
+firebase_creds = os.getenv("FIREBASE_CREDENTIALS")
+if firebase_creds:
+    try:
+        cred_dict = json.loads(firebase_creds)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("✅ Firebase connecté")
+    except Exception as e:
+        print("⚠️ Firebase erreur:", e)
+else:
+    print("⚠️ FIREBASE_CREDENTIALS non trouvée")
 
 # Init Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+    print("⚠️ GEMINI_API_KEY non trouvée")
 
 # ========== FONCTIONS WHATSAPP ==========
 def envoyer_whatsapp(numero, message):
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        print("Token WhatsApp manquant")
+        return
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {
@@ -48,7 +60,9 @@ def envoyer_whatsapp(numero, message):
 
 # ========== LOGIQUE CORE ==========
 def traiter_message(numero, message_user, produits=[]):
-    """Cette fonction remplace /chat pour éviter l'appel localhost"""
+    if not model:
+        return "Bot en maintenance"
+
     prompt = f"""
     Tu es l'assistante de SUNU.COM au Sénégal. Tu vends ça: {produits}
     Client: {numero} a dit: "{message_user}"
@@ -113,19 +127,16 @@ def webhook():
         message = data["entry"][0]["changes"][0]["value"]["messages"][0]
         numero = message["from"]
         texte = message["text"]["body"]
-
-        # CORRECTION ICI : Appel direct au lieu de requests.post
         reponse = traiter_message(numero, texte)
         envoyer_whatsapp(numero, reponse)
-
     except Exception as e:
         print("Erreur webhook:", e)
     return "ok", 200
 
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Bot Gestionnaire Sunu connecté + Firestore", 200
+    return "✅ Bot Gestionnaire Sunu connecté", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port) je parle de ça c'est le server ou gestionnaire ?
+    app.run(host="0.0.0.0", port=port)
