@@ -1,112 +1,138 @@
 import os
 import json
-import re
-from datetime import datetime
+import requests
+import firebase_admin
+from firebase_admin import credentials, firestore
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import firebase_admin
-from firebase_admin import credentials, db, firestore
 import google.generativeai as genai
 
 app = Flask(__name__)
 CORS(app)
 
-# ===== CONFIG =====
-cred_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-cred_dict = json.loads(cred_json)
-cred = credentials.Certificate(cred_dict)
-database_url = os.environ.get("FIREBASE_URL")
-firebase_admin.initialize_app(cred, {'databaseURL': database_url})
+# ========== CONFIG ==========
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+ADMIN_WHATSAPP = "22177XXXXXXX" # Mets ton numéro admin ici
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-firestore_db = firestore.client() # POUR LIRE FIRESTORE
+# Init Firebase
+cred = credentials.Certificate(json.loads(os.getenv("FIREBASE_CREDENTIALS")))
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# Init Gemini
+genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-clients = {}
-
-print("✅ Bot Gestionnaire Sunu connecté + Firestore")
-
-@app.route('/', methods=['GET'])
-def accueil():
-    return "<h1>Bot SUNU.COM EN LIGNE ✅</h1>", 200
-
-def get_produits_firebase():
-    """Lit directement la collection 'Produits' de Firestore"""
-    produits = []
+# ========== FONCTIONS WHATSAPP ==========
+def envoyer_whatsapp(numero, message):
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    data = {
+        "messaging_product": "whatsapp",
+        "to": f"221{numero}" if not numero.startswith("221") else numero,
+        "type": "text",
+        "text": {"body": message}
+    }
     try:
-        docs = firestore_db.collection('Produits').stream()
-        for doc in docs:
-            data = doc.to_dict()
-            produits.append({
-                "id": doc.id,
-                "nom": data.get('nom', 'Sans nom'),
-                "prix": data.get('prix', 0),
-                "image": data.get('image', '')
-            })
+        r = requests.post(url, headers=headers, json=data, timeout=10)
+        print("WhatsApp envoyé:", r.status_code)
     except Exception as e:
-        print("Erreur lecture produits:", e)
-    return produits
+        print("Erreur WhatsApp:", e)
 
-def extraire_infos_commande(message):
-    tel_match = re.search(r'7[06758]\d{7}', message)
-    tel = tel_match.group() if tel_match else ""
-    nom_match = re.search(r'nom\s*(?:est|:)?\s*([a-zA-Z\s]+)', message)
-    nom = nom_match.group(1).strip().title() if nom_match else ""
-    adresse_match = re.search(r'adresse\s*(?:est|:)?\s*(.+)', message)
-    adresse = adresse_match.group(1).strip().title() if adresse_match else ""
-    return nom, tel, adresse
-
-def sauvegarder_commande(data_commande):
+# ========== LOGIQUE GESTIONNAIRE ==========
+def gestion_direct(data):
+    """On appelle ça direct au lieu de faire requests.post pour éviter le blocage"""
+    print("Commande reçue direct:", data)
     try:
-        ref = db.reference('/commandes')
-        ref.push(data_commande)
-        return True
-    except:
-        return False
+        nom = data["nom"]
+        whatsapp = data["whatsapp"]
+        adresse = data["adresse"]
+        total = data["total"]
+        produits = data["produits"]
 
-@app.route('/chat', methods=['POST'])
+        # 1. Sauver dans Firestore
+        db.collection("commandes").add({
+            "nom": nom, "whatsapp": whatsapp, "adresse": adresse,
+            "total": total, "produits": produits, "statut": "nouvelle"
+        })
+
+        # 2. Message client
+        message_client = f"Salut {nom} 😊\nMerci pour ta commande SUNU COM!\n\nTotal: {total} FCFA\nAdresse: {adresse}\nLivraison 24H\n\nPaiement à la livraison."
+        envoyer_whatsapp(whatsapp, message_client)
+
+        # 3. Alerte Admin
+        message_admin = f"🚨 NOUVELLE COMMANDE\nNom: {nom}\nTel: {whatsapp}\nTotal: {total} FCFA\nAdresse: {adresse}"
+        envoyer_whatsapp(ADMIN_WHATSAPP, message_admin)
+
+        return {"status": "ok"}
+    except Exception as e:
+        print("Erreur gestion:", e)
+        return {"status": "erreur", "details": str(e)}
+
+# ========== LOGIQUE ASSISTANT GEMINI ==========
+@app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json()
-    message = data.get('message', '').lower()
-    numero = data.get('numero')
+    data = request.json
+    numero = data.get("numero")
+    message_user = data.get("message")
+    produits = data.get("produits", [])
 
-    produits = get_produits_firebase() # ON LIT FIREBASE A CHAQUE FOIS
+    prompt = f"""
+    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends ça: {produits}
+    Client: {numero} a dit: "{message_user}"
 
-    if numero not in clients:
-        clients[numero] = {}
+    Règles:
+    1. Sois chaleureuse et courte. En Wolof/Français.
+    2. Si le client veut commander, demande: Nom + Téléphone + Adresse.
+    3. Quand tu as Nom + Tel + Adresse, réponds UNIQUEMENT avec ce JSON:
+    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total":..., "produits":...}}
+    4. Sinon réponds normalement pour vendre.
+    """
 
-    if 'produit' in message or 'catalogue' in message:
-        reponse = "Voici nos produits SUNU 👇\n\n"
-        for i, p in enumerate(produits[:10]):
-            reponse += f"{i+1}. *{p['nom']}* - {int(p['prix']):,} FCFA\n{p['image']}\n\n"
-        reponse += "Tape le numéro pour commander. Ex: 1"
+    try:
+        response = model.generate_content(prompt)
+        texte = response.text.strip()
 
-    elif message.isdigit() and 1 <= int(message) <= len(produits):
-        produit = produits[int(message)-1]
-        clients[numero]['produit'] = produit
-        reponse = f"✅ *{produit['nom']}* à {int(produit['prix']):,} FCFA\n\nDonne: Nom + Téléphone + Adresse"
+        # Si Gemini renvoie du JSON = c'est une commande
+        if texte.startswith("{"):
+            commande = json.loads(texte)
+            if commande.get("action") == "creer_commande":
+                gestion_direct(commande) # APPEL DIRECT ICI
+                return jsonify({"reponse": "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."})
 
-    elif any(mot in message for mot in ["commander", "nom", "adresse"]):
-        nom, tel, adresse = extraire_infos_commande(message)
-        if nom and tel and adresse:
-            produit = clients[numero].get('produit', {'nom': 'Produit'})
-            commande = {"nom": nom, "telephone": tel, "adresse": adresse, "produit": produit['nom'], "prix": produit['prix'], "date": datetime.now().strftime("%d/%m/%Y %H:%M")}
-            if sauvegarder_commande(commande):
-                reponse = f"✅ Commande confirmée {nom}!\nProduit: {produit['nom']}\nOn t'appelle au {tel} dans 5min."
-            else:
-                reponse = "Erreur système."
-        else:
-            reponse = "Donne: Nom + Téléphone + Adresse"
-    else:
-        try:
-            noms_produits = ', '.join([p['nom'] for p in produits[:10]])
-            prompt = f"Tu es assistant SUNU.COM Dakar. Sois court et commercial. Client: '{message}'. Produits dispo: {noms_produits}."
-            reponse = model.generate_content(prompt).text
-        except:
-            reponse = "Tape 'produits' pour voir le catalogue"
+        return jsonify({"reponse": texte})
 
-    return jsonify({"reponse": reponse})
+    except Exception as e:
+        print("Erreur chat:", e)
+        return jsonify({"reponse": "Désolée, petite erreur. Pouvez-vous répéter?"})
+
+# ========== ROUTE WEBHOOK WHATSAPP ==========
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        return request.args.get("hub.challenge")
+
+    data = request.json
+    try:
+        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+        numero = message["from"]
+        texte = message["text"]["body"]
+
+        # Appelle /chat
+        r = requests.post("http://localhost:10000/chat", json={"numero": numero, "message": texte}, timeout=30)
+        reponse = r.json()["reponse"]
+        envoyer_whatsapp(numero, reponse)
+
+    except Exception as e:
+        print("Erreur webhook:", e)
+    return "ok", 200
+
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Bot Gestionnaire Sunu connecté + Firestore", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
