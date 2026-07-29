@@ -99,19 +99,23 @@ def traiter_message(numero, message_user, produits=[]):
         return "Le bot est en maintenance. Réessayez dans 5min."
 
     prompt = f"""
-    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends: {produits}
-    Client: {numero} a dit: "{message_user}"
+    Tu es l'assistante commerciale de SUNU.COM au Sénégal. Produits disponibles: {produits}
+    Le client {numero} dit: "{message_user}"
 
-    Règles:
-    1. Sois chaleureuse et courte. Parle en Wolof/Français.
-    2. Si le client donne seulement son numéro, remercie et demande son Nom et Adresse.
-    3. Si le client donne Nom + Adresse, réponds UNIQUEMENT avec ce JSON:
-    {{"action": "creer_commande", "nom": "...", "whatsapp": "{numero}", "adresse": "...", "total": 0, "produits": "panier"}}
-    4. Sinon réponds normalement pour vendre et aider.
+    Objectif: Aider le client et prendre les commandes.
+
+    RÈGLES IMPORTANTES:
+    1. Si le message contient juste un numéro de téléphone, réponds: "Merci! Quel est votre nom complet et votre adresse de livraison?"
+    2. Si le message contient Nom ET Adresse, réponds UNIQUEMENT avec ce JSON et rien d'autre:
+    {{"action": "creer_commande", "nom": "NOM ICI", "whatsapp": "{numero}", "adresse": "ADRESSE ICI", "total": 0, "produits": "panier"}}
+    3. Sinon, réponds normalement de façon chaleureuse pour vendre.
+
+    Parle en français avec quelques mots Wolof. Sois courte.
     """
     try:
         response = model.generate_content(prompt)
         texte = response.text.strip()
+        texte = texte.replace("```json", "").replace("```", "") # Nettoyer si Gemini met du code
 
         # Si Gemini renvoie du JSON = c'est une commande
         if texte.startswith("{") and "action" in texte:
@@ -121,7 +125,7 @@ def traiter_message(numero, message_user, produits=[]):
                     gestion_direct(commande)
                     return "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."
             except Exception as e:
-                print("JSON cassé:", e)
+                print("JSON cassé:", e, texte)
                 return "Merci. Pouvez-vous me redonner votre nom et adresse complète svp?"
 
         return texte
