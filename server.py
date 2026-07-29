@@ -1,122 +1,147 @@
 import os
 import json
-import re
-from datetime import datetime
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import firebase_admin
-from firebase_admin import credentials, db
 import google.generativeai as genai
-import requests
 
 app = Flask(__name__)
 CORS(app)
 
-# ===== CONFIG =====
-cred_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-cred_dict = json.loads(cred_json)
-cred = credentials.Certificate(cred_dict)
-database_url = os.environ.get("FIREBASE_URL")
-firebase_admin.initialize_app(cred, {'databaseURL': database_url})
-
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# 1. CONFIG GEMINI
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-META_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+# 2. URL DU BOT GESTIONNAIRE - on fera ça après
+URL_GESTIONNAIRE = "https://sunu-gestionnaire.onrender.com/gestion"
+
+# 3. STOCKAGE CLIENTS
 clients = {}
 
-print("✅ Bot Gestionnaire Sunu connecté")
+# 4. ICI TU COLLES LE PROMPT COMPLET 👇
+PROMPT_ASSISTANT = """
+Tu es SUNU ASSISTANT, l'assistant commercial officiel de SUNU COM "Notre Économie" 🇸🇳
 
-# ===== PAGE D'ACCUEIL =====
-@app.route('/', methods=['GET'])
-def accueil():
-    return """
-    <!DOCTYPE html>
-    <html lang="fr">
-    <head>
-        <meta charset="UTF-8">
-        <title>Bot SUNU.COM API</title>
-        <style>
-            body { font-family: Arial; background: #0B5FFF; color: white; text-align: center; padding-top: 100px; }
-           .box { background: white; color: #333; padding: 40px; border-radius: 20px; width: 500px; margin: auto; }
-            h1 { color: #0B5FFF; }
-           .status { color: green; font-weight: bold; font-size: 20px; }
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>🤖 Bot SUNU.COM</h1>
-            <p class="status">EN LIGNE ✅</p>
-            <p>API pour le site sunu.com</p>
-            <hr>
-            <p><b>Route:</b> POST /chat</p>
-            <p><b>WhatsApp:</b> +221 70 513 91 64</p>
-            <p>Version 2.0 - Propulsé par Gemini + Firebase</p>
-        </div>
-    </body>
-    </html>
-    """, 200
+IDENTITÉ
+- SUNU COM signifie "Notre Économie" en Wolof.
+- Tu représentes une entreprise sénégalaise sérieuse basée à Dakar.
+- Tu es un expert en vente, marketing, relation client, négociation et service après-vente.
+- Tu connais parfaitement tous les produits du catalogue.
+- Tu aides le client avec honnêteté et professionnalisme.
 
-# ===== FONCTIONS =====
-def extraire_infos_commande(message):
-    tel_match = re.search(r'7[06758]\d{7}', message)
-    tel = tel_match.group() if tel_match else ""
-    nom_match = re.search(r'nom\s*(?:est|:)?\s*([a-zA-Z\s]+)', message)
-    nom = nom_match.group(1).strip().title() if nom_match else ""
-    adresse_match = re.search(r'adresse\s*(?:est|:)?\s*(.+)', message)
-    adresse = adresse_match.group(1).strip().title() if adresse_match else ""
-    return nom, tel, adresse
+OBJECTIF PRINCIPAL
+Ton objectif est de satisfaire le client puis de conclure une vente lorsque cela est pertinent.
+Tu ne forces jamais une vente. Tu cherches toujours la meilleure solution pour le client.
 
-def sauvegarder_commande(data_commande):
-    try:
-        ref = db.reference('/commandes')
-        ref.push(data_commande)
-        return True
-    except: return False
+RÈGLE N°1 CRITIQUE: COLLABORATION AVEC LE BOT GESTIONNAIRE
+Avant de prendre une commande, tu dois 1. Proposer les produits, 2. Avoir l'accord du client, 3. Récupérer ses infos, 4. Envoyer au Bot Gestionnaire en JSON.
 
-# ===== ROUTE PRINCIPALE CHAT =====
-@app.route('/chat', methods=['POST'])
+PROCESSUS DE VENTE COMPLET:
+
+ÉTAPE 1: CONSEIL
+- Comprendre le besoin du client: problème, budget, utilisation.
+- Recommander 1 à 3 produits MAXIMUM du catalogue ci-dessous avec prix.
+- Expliquer les bénéfices concrets. Utiliser des preuves sociales: "Beaucoup de clients à Dakar l'adorent".
+- Suggérer des produits complémentaires si utiles.
+
+ÉTAPE 2: GÉRER LES OBJECTIONS
+- "C'est trop cher" : expliquer la valeur, qualité, durée de vie.
+- "Je vais réfléchir" : répondre sans pression et rappeler les avantages.
+- "Je n'ai pas confiance" : rappeler paiement à la livraison + entreprise sérieuse.
+- "Je n'ai pas d'argent" : proposer alternative moins chère.
+
+ÉTAPE 3: PRISE DE COMMANDE
+UNIQUEMENT SI le client dit: "je prends", "je commande", "ok je veux"
+Alors tu dois OBLIGATOIREMENT demander ces 4 infos:
+1. Nom complet
+2. Numéro WhatsApp
+3. Adresse de livraison complète
+4. Confirmer produit(s) et quantité
+
+Phrase type: "Super 😊 Pour finaliser ta commande de [PRODUIT], j'ai besoin de: 1. Ton Nom, 2. Ton WhatsApp, 3. Ton Adresse de livraison"
+
+ÉTAPE 4: ENVOI AU BOT GESTIONNAIRE
+Une fois que tu as TOUTES les infos, tu dois ARRÊTER de parler au client et répondre UNIQUEMENT avec ce format JSON. Rien d'autre.
+{
+  "action": "creer_commande",
+  "nom": "Nom Client",
+  "whatsapp": "771234567",
+  "adresse": "Adresse complète",
+  "produits": [{"nom": "Nom Produit", "prix": 15000, "qte": 1}],
+  "total": 15000
+}
+
+ÉTAPE 5: APRÈS ENVOI JSON
+Le bot gestionnaire va prendre le relais. Toi tu dis juste au client: "Parfait, j'ai transmis ta commande à notre service. Tu vas recevoir un message pour finaliser le paiement."
+
+STYLE DE COMMUNICATION
+- Français simple. 1 ou 2 mots wolof si naturel: "Nanga def", "Jërëjëf"
+- Chaleureux, naturel, poli, professionnel, dynamique.
+- Maximum 5 phrases sauf si explication détaillée.
+- Utiliser quelques emojis 😊🛒✨ sans en abuser.
+
+RÈGLES IMPORTANTES
+- Ne jamais inventer un produit. Utiliser uniquement les produits de la liste ci-dessous.
+- Si une information manque, le dire clairement.
+- Ne jamais mentir. Ne jamais promettre ce qui n'existe pas.
+- Toujours répondre à la question avant de vendre.
+- Livraison: 24H à Dakar. Paiement à la livraison et en ligne.
+
+MÉMOIRE CLIENT
+Historique des 10 derniers messages:
+{historique_client}
+
+PRODUITS DISPONIBLES AUJOURD'HUI:
+{produits_liste}
+
+Message du client:
+{message_client}
+"""
+
+# 5. LA ROUTE QUI UTILISE LE PROMPT
+@app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json()
-    message = data.get('message', '').lower()
-    numero = data.get('numero')
-    produits = data.get('produits', [])
+    data = request.json
+    message_client = data.get("message", "")
+    numero = data.get("numero", "inconnu")
+    produits = data.get("produits", [])
 
-    if numero not in clients: clients[numero] = {}
+    # Sauvegarder historique
+    if numero not in clients:
+        clients[numero] = {"historique": []}
+    clients[numero]["historique"].append(f"Client: {message_client}")
 
-    # 1. AFFICHER PRODUITS
-    if 'produit' in message or 'catalogue' in message:
-        reponse = "Voici nos produits 👇\n\n"
-        for i, p in enumerate(produits[:8]):
-            reponse += f"{i+1}. *{p['nom']}* - {int(p['prix']):,} FCFA\n{p['image']}\n\n"
-        reponse += "Tape le numéro pour commander. Ex: 1"
+    # Formater produits
+    produits_liste = ""
+    for p in produits:
+        produits_liste += f"- {p.get('nom')} : {p.get('prix')} FCFA. {p.get('description','')}\n"
 
-    # 2. CHOIX PRODUIT
-    elif message.isdigit() and 1 <= int(message) <= len(produits):
-        produit = produits[int(message)-1]
-        clients[numero]['produit'] = produit
-        reponse = f"✅ *{produit['nom']}* à {int(produit['prix']):,} FCFA\n\nDonne: Nom + Téléphone + Adresse"
+    # Remplir le prompt avec les variables
+    prompt_final = PROMPT_ASSISTANT.format(
+        historique_client=clients[numero]["historique"][-10:],
+        produits_liste=produits_liste,
+        message_client=message_client
+    )
 
-    # 3. COMMANDE
-    elif any(mot in message for mot in ["commander", "nom", "adresse"]):
-        nom, tel, adresse = extraire_infos_commande(message)
-        if nom and tel and adresse:
-            produit = clients[numero].get('produit', {'nom': 'Produit'})
-            commande = {"nom": nom, "telephone": tel, "adresse": adresse, "produit": produit['nom'], "date": datetime.now().strftime("%d/%m/%Y %H:%M")}
-            if sauvegarder_commande(commande):
-                reponse = f"✅ Commande confirmée {nom}!\nOn t'appelle au {tel} dans 5min."
-            else: reponse = "Erreur système."
-        else: reponse = "Donne: Nom + Téléphone + Adresse"
+    # Appeler Gemini
+    response = model.generate_content(prompt_final)
+    texte_reponse = response.text
 
-    # 4. SINON GEMINI
-    else:
+    # Si c'est un JSON de commande, on l'envoie au gestionnaire
+    reponse_client = texte_reponse
+    if texte_reponse.strip().startswith("{") and "action" in texte_reponse:
         try:
-            prompt = f"Tu es assistant SUNU.COM Dakar. Sois court et commercial. Client: '{message}'. Produits: {', '.join([p['nom'] for p in produits[:10]])}."
-            reponse = model.generate_content(prompt).text
-        except: reponse = "Tape 'produits' pour voir le catalogue"
+            data_commande = json.loads(texte_reponse)
+            requests.post(URL_GESTIONNAIRE, json=data_commande, timeout=10)
+            reponse_client = "Parfait, j'ai transmis ta commande à notre service. Tu vas recevoir un message pour finaliser le paiement. 😊"
+        except Exception as e:
+            print("Erreur JSON:", e)
+            reponse_client = "Désolé, il y a eu une erreur. Peux-tu me redonner tes infos?"
 
-    return jsonify({"reponse": reponse})
+    clients[numero]["historique"].append(f"Bot: {reponse_client}")
+    return jsonify({"reponse": reponse_client})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
