@@ -13,7 +13,7 @@ CORS(app)
 # ========== CONFIG ==========
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-ADMIN_WHATSAPP = "221779075432"
+ADMIN_WHATSAPP = "221779075432" # Ton numéro admin
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Init Firebase - VERSION SÉCURISÉE
@@ -29,21 +29,26 @@ if firebase_creds:
     except Exception as e:
         print("⚠️ Firebase erreur:", e)
 else:
-    print("⚠️ FIREBASE_CREDENTIALS non trouvée")
+    print("⚠️ FIREBASE_CREDENTIALS non trouvée dans Render")
 
-# Init Gemini
+# Init Gemini - VERSION SÉCURISÉE
+model = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        print("✅ Gemini connecté")
+    except Exception as e:
+        print("⚠️ Gemini erreur:", e)
 else:
-    model = None
-    print("⚠️ GEMINI_API_KEY non trouvée")
+    print("⚠️ GEMINI_API_KEY non trouvée dans Render")
 
 # ========== FONCTIONS WHATSAPP ==========
 def envoyer_whatsapp(numero, message):
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-        print("Token WhatsApp manquant")
+        print("Erreur: Token WhatsApp ou Phone ID manquant")
         return
+
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     data = {
@@ -54,30 +59,31 @@ def envoyer_whatsapp(numero, message):
     }
     try:
         r = requests.post(url, headers=headers, json=data, timeout=10)
-        print("WhatsApp envoyé:", r.status_code)
+        print("WhatsApp envoyé:", r.status_code, r.text[:100])
     except Exception as e:
         print("Erreur WhatsApp:", e)
 
 # ========== LOGIQUE CORE ==========
 def traiter_message(numero, message_user, produits=[]):
     if not model:
-        return "Bot en maintenance"
+        return "Le bot est en maintenance. Réessayez dans 5min."
 
     prompt = f"""
-    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends ça: {produits}
+    Tu es l'assistante de SUNU.COM au Sénégal. Tu vends: {produits}
     Client: {numero} a dit: "{message_user}"
 
     Règles:
-    1. Sois chaleureuse et courte. En Wolof/Français.
+    1. Sois chaleureuse et courte. Parle en Wolof/Français.
     2. Si le client veut commander, demande: Nom + Téléphone + Adresse.
     3. Quand tu as Nom + Tel + Adresse, réponds UNIQUEMENT avec ce JSON:
-    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total":..., "produits":...}}
+    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total": 0, "produits": "..."}}
     4. Sinon réponds normalement pour vendre.
     """
     try:
         response = model.generate_content(prompt)
         texte = response.text.strip()
 
+        # Si Gemini renvoie du JSON = c'est une commande
         if texte.startswith("{"):
             commande = json.loads(texte)
             if commande.get("action") == "creer_commande":
@@ -91,18 +97,27 @@ def traiter_message(numero, message_user, produits=[]):
 def gestion_direct(data):
     print("Commande reçue direct:", data)
     try:
-        nom = data["nom"]; whatsapp = data["whatsapp"]; adresse = data["adresse"]; total = data["total"]; produits = data["produits"]
+        nom = data["nom"]
+        whatsapp = data["whatsapp"]
+        adresse = data["adresse"]
+        total = data["total"]
+        produits = data["produits"]
 
+        # Sauvegarde Firebase
         if db:
             db.collection("commandes").add({
                 "nom": nom, "whatsapp": whatsapp, "adresse": adresse,
-                "total": total, "produits": produits, "statut": "nouvelle"
+                "total": total, "produits": produits, "statut": "nouvelle",
+                "date": firestore.SERVER_TIMESTAMP
             })
+            print("✅ Sauvegardé dans Firebase")
 
+        # Message Client
         message_client = f"Salut {nom} 😊\nMerci pour ta commande SUNU COM!\n\nTotal: {total} FCFA\nAdresse: {adresse}\nLivraison 24H\nPaiement à la livraison."
         envoyer_whatsapp(whatsapp, message_client)
 
-        message_admin = f"🚨 NOUVELLE COMMANDE\nNom: {nom}\nTel: {whatsapp}\nTotal: {total} FCFA\nAdresse: {adresse}"
+        # Alerte Admin
+        message_admin = f"🚨 NOUVELLE COMMANDE\nNom: {nom}\nTel: {whatsapp}\nTotal: {total} FCFA\nAdresse: {adresse}\nProduits: {produits}"
         envoyer_whatsapp(ADMIN_WHATSAPP, message_admin)
 
         return {"status": "ok"}
@@ -127,15 +142,17 @@ def webhook():
         message = data["entry"][0]["changes"][0]["value"]["messages"][0]
         numero = message["from"]
         texte = message["text"]["body"]
+
         reponse = traiter_message(numero, texte)
         envoyer_whatsapp(numero, reponse)
+
     except Exception as e:
         print("Erreur webhook:", e)
     return "ok", 200
 
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Bot Gestionnaire Sunu connecté", 200
+    return "✅ Bot Sunu connecté + Firestore + Gemini", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
