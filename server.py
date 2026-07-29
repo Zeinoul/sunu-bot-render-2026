@@ -64,6 +64,38 @@ def envoyer_whatsapp(numero, message):
         print("Erreur WhatsApp:", e)
 
 # ========== LOGIQUE CORE ==========
+Ok je te montre exactement 👇
+
+Dans ton `server.py` sur Render, cherche la fonction `def traiter_message`
+
+### *1. SUPPRIME ÇA ENTIER :*
+
+De :
+def traiter_message(numero, message_user, produits=[]):
+    if not model:
+        return "Le bot est en maintenance."
+
+    prompt = f"""
+    Tu es l'assistante de SUNU.COM...
+    ...
+    """
+
+    response = model.generate_content(prompt)
+    texte = response.text.strip()
+
+    if texte.startswith("{") and "action" in texte:
+        try:
+            commande = json.loads(texte)
+            if commande.get("action") == "creer_commande":
+                gestion_direct(commande)
+                return "Parfait! Votre commande est enregistrée."
+        except:
+            pass
+
+    return texte
+Jusqu'à :
+return texte
+### *2. COLLE ÇA À LA PLACE :*
 def traiter_message(numero, message_user, produits=[]):
     if not model:
         return "Le bot est en maintenance. Réessayez dans 5min."
@@ -74,22 +106,43 @@ def traiter_message(numero, message_user, produits=[]):
 
     Règles:
     1. Sois chaleureuse et courte. Parle en Wolof/Français.
-    2. Si le client veut commander, demande: Nom + Téléphone + Adresse.
-    3. Quand tu as Nom + Tel + Adresse, réponds UNIQUEMENT avec ce JSON:
-    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total": 0, "produits": "..."}}
-    4. Sinon réponds normalement pour vendre.
+    2. Si le client donne son numéro, remercie et demande son Nom et Adresse.
+    3. Si le client donne Nom + Téléphone + Adresse, réponds UNIQUEMENT avec ce JSON:
+    {{"action": "creer_commande", "nom": "...", "whatsapp": "...", "adresse": "...", "total": 0, "produits": "panier"}}
+    4. Sinon réponds normalement pour vendre et aider.
     """
     try:
         response = model.generate_content(prompt)
         texte = response.text.strip()
 
         # Si Gemini renvoie du JSON = c'est une commande
-        if texte.startswith("{"):
-            commande = json.loads(texte)
-            if commande.get("action") == "creer_commande":
-                gestion_direct(commande)
-                return "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."
+        if texte.startswith("{") and "action" in texte:
+            try:
+                commande = json.loads(texte)
+                if commande.get("action") == "creer_commande":
+                    gestion_direct(commande)
+                    return "Parfait! Votre commande est enregistrée. Vous allez recevoir un WhatsApp de confirmation."
+            except Exception as e:
+                print("JSON cassé:", e)
+                return "Merci. Pouvez-vous me redonner votre nom et adresse complète svp?"
+        
         return texte
+    except Exception as e:
+        print("Erreur Gemini:", e)
+        return "Navrée, petite erreur technique. Pouvez-vous répéter svp?"
+### *3. APRES AVOIR COLLE*
+1.  `git add .` `git commit -m "fix bot"` `git push`
+2.  Va sur Render > Manual Deploy > Clear build cache & deploy
+3.  Attends 2min que ça redémarre
+
+### *4. TEST*
+Toi: 77 907 54 32
+Bot: Merci! Quel est votre nom et adresse de livraison?
+Toi: Aicha Ndiaye Parcelles Assainies
+Bot: Parfait! Votre commande est enregistrée...
+Et dans Firebase tu verras la commande apparaître dans `commandes`
+
+Fais ça et envoie-moi la réponse du bot après le déploiement
     except Exception as e:
         print("Erreur Gemini:", e)
         return "Désolée, petite erreur. Pouvez-vous répéter?"
